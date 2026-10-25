@@ -1,6 +1,9 @@
 name: XPAD Build Test
 
-on: [workflow_dispatch]
+'on':
+push:
+branches:
+- main
 
 jobs:
 test:
