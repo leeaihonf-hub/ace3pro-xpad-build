@@ -1,16 +1,7 @@
-name: Prepare Ace 3 Pro XPAD Build
+name: XPAD Build Test
 
-'on': workflow_dispatch:
+on: [workflow_dispatch]
 
-permissions:contents: read
-
-jobs:prepare:runs-on: ubuntu-latest
-timeout-minutes: 360
-
-steps:
-  - name: Test workflow syntax
-    run: |
-      echo "Workflow syntax is valid."
-      echo "Runner: $(uname -a)"
-      echo "Available disk space:"
-      df -h
+jobs:test:runs-on: ubuntu-lateststeps:
+- name: Check runner
+run: echo "Workflow syntax OK"
