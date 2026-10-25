@@ -1,149 +1,159 @@
-
 name: Ace 3 Pro XPAD Kernel Build
 
 'on':
-  workflow_dispatch:
+workflow_dispatch:
 
 permissions:
-  contents: read
+contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
+build:
+runs-on: ubuntu-24.04
+timeout-minutes: 360
 
-    steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            git curl python3 \
-            bc bison flex \
-            build-essential \
-            libssl-dev libelf-dev \
-            zip unzip rsync \
-            device-tree-compiler
+steps:
+  - name: Install dependencies
+    run: |
+      sudo apt-get update
+      sudo apt-get install -y \
+        git curl python3 bc bison flex \
+        build-essential libssl-dev libelf-dev \
+        zip unzip rsync device-tree-compiler
 
-      - name: Install repo tool
-        run: |
-          set -eux
-          mkdir -p "$HOME/bin"
-          curl -fL \
-            https://storage.googleapis.com/git-repo-downloads/repo \
-            -o "$HOME/bin/repo"
-          chmod +x "$HOME/bin/repo"
-          echo "$HOME/bin" >> "$GITHUB_PATH"
+  - name: Install repo tool
+    run: |
+      set -eux
+      mkdir -p "$HOME/bin"
+      curl -fL \
+        https://storage.googleapis.com/git-repo-downloads/repo \
+        -o "$HOME/bin/repo"
+      chmod +x "$HOME/bin/repo"
+      echo "$HOME/bin" >> "$GITHUB_PATH"
 
-      - name: Initialize official OnePlus manifest
-        run: |
-          set -eux
-          mkdir -p kernel-work
-          cd kernel-work
-          repo init \
-            -u https://github.com/OnePlusOSS/kernel_manifest.git \
-            -b oneplus/sm8650 \
-            -m oneplus_ace3_pro_b.xml \
-            --depth=1
+  - name: Initialize official OnePlus manifest
+    run: |
+      set -eux
+      mkdir -p kernel-work
+      cd kernel-work
+      repo init \
+        -u https://github.com/OnePlusOSS/kernel_manifest.git \
+        -b oneplus/sm8650 \
+        -m oneplus_ace3_pro_b.xml \
+        --depth=1
 
-      - name: Sync official kernel sources
-        working-directory: kernel-work
-        run: |
-          set -eux
-          repo sync -c -j2 --no-clone-bundle --no-tags
+  - name: Sync official kernel sources
+    working-directory: kernel-work
+    run: |
+      set -eux
+      repo sync -c -j2 --no-clone-bundle --no-tags
 
-      - name: Check build script
-        working-directory: kernel-work
-        run: |
-          set -eux
-          test -f kernel_platform/oplus/build/oplus_build_kernel.sh
-          echo "=== Official build script ==="
-          sed -n '1,220p' \
-            kernel_platform/oplus/build/oplus_build_kernel.sh
-          echo "=== XPAD configuration options ==="
-          grep -n -A25 -B5 'config JOYSTICK_XPAD' \
-            kernel_platform/common/drivers/input/joystick/Kconfig
+  - name: Inspect XPAD Kconfig and build configuration
+    working-directory: kernel-work
+    shell: bash
+    run: |
+      set -eu
 
-      - name: Build official Ace 3 Pro GKI kernel
-        working-directory: kernel-work
-        shell: bash
-        run: |
-          set -o pipefail
-          bash kernel_platform/oplus/build/oplus_build_kernel.sh pineapple gki \
-            2>&1 | tee "$GITHUB_WORKSPACE/official-build.log"
+      KCONFIG="kernel_platform/common/drivers/input/joystick/Kconfig"
+      test -f "$KCONFIG"
 
-      - name: Inspect generated XPAD config
-        if: always()
-        working-directory: kernel-work
-        shell: bash
-        run: |
-          set +e
+      echo "=== XPAD Kconfig ==="
+      grep -n -A25 -B5 'config JOYSTICK_XPAD' "$KCONFIG"
 
-          find kernel_platform -type f -name .config \
-            -print > "$GITHUB_WORKSPACE/config-files.txt"
+      echo "=== Official build script ==="
+      test -f kernel_platform/oplus/build/oplus_build_kernel.sh
+      sed -n '1,220p' \
+        kernel_platform/oplus/build/oplus_build_kernel.sh
 
-          while IFS= read -r config; do
-            echo "=== $config ==="
-            grep -E \
-              '^(CONFIG_JOYSTICK_XPAD=|CONFIG_JOYSTICK_XPAD_FF=|CONFIG_INPUT_FF_MEMLESS=|# CONFIG_JOYSTICK_XPAD_FF is not set)' \
-              "$config" || true
-          done < "$GITHUB_WORKSPACE/config-files.txt"
+      echo "=== Pineapple GKI config references ==="
+      grep -RIn \
+        --include='*.bzl' \
+        --include='BUILD*' \
+        --include='*.sh' \
+        --include='*.config' \
+        -E 'pineapple_gki|gki_defconfig|KERNEL_CONFIG|defconfig' \
+        kernel_platform/msm-kernel \
+        kernel_platform/oplus/build \
+        2>/dev/null | head -200 || true
 
-          echo "=== Search build output candidates ==="
-          find kernel_platform -type f \
-            \( -name Image -o -name Image.gz -o -name Image.lz4 \
-               -o -name boot.img -o -name vendor_boot.img \
-               -o -name '*.zip' \) \
-            -print > "$GITHUB_WORKSPACE/build-artifacts.txt"
+  - name: Build official Ace 3 Pro GKI kernel
+    working-directory: kernel-work
+    shell: bash
+    run: |
+      set -o pipefail
+      bash kernel_platform/oplus/build/oplus_build_kernel.sh pineapple gki \
+        2>&1 | tee "$GITHUB_WORKSPACE/official-build.log"
 
-          cat "$GITHUB_WORKSPACE/build-artifacts.txt"
+  - name: Inspect generated XPAD config
+    if: always()
+    working-directory: kernel-work
+    shell: bash
+    run: |
+      set +e
 
-      - name: Upload build logs and configuration
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ace3pro-xpad-build-results
-          path: |
-            official-build.log
-            config-files.txt
-            build-artifacts.txt
-            kernel-work/kernel_platform/**/.config
-          if-no-files-found: warn
-          retention-days: 7
+      find kernel_platform/out -type f -name .config \
+        -print > "$GITHUB_WORKSPACE/config-files.txt"
 
-      - name: Collect compiled kernel images
-        if: success()
-        working-directory: kernel-work
-        shell: bash
-        run: |
-          set -eu
+      while IFS= read -r config; do
+        echo "=== $config ==="
+        grep -E \
+          '^(CONFIG_JOYSTICK_XPAD=|CONFIG_JOYSTICK_XPAD_FF=|CONFIG_INPUT_FF_MEMLESS=|# CONFIG_JOYSTICK_XPAD_FF is not set)' \
+          "$config" || true
+      done < "$GITHUB_WORKSPACE/config-files.txt"
 
-          DIST="kernel_platform/out/msm-kernel-pineapple-gki/dist"
-          OUT="$GITHUB_WORKSPACE/kernel-images"
-          mkdir -p "$OUT"
+      echo "=== Build output candidates ==="
+      find kernel_platform/out -type f \
+        \( -name Image -o -name Image.gz -o -name Image.lz4 \
+           -o -name boot.img -o -name vendor_boot.img \) \
+        -print > "$GITHUB_WORKSPACE/build-artifacts.txt"
 
-          for f in boot.img vendor_boot.img Image Image.gz Image.lz4; do
-            if [ -s "$DIST/$f" ]; then
-              cp "$DIST/$f" "$OUT/"
-              echo "Collected: $f ($(du -h "$OUT/$f" | cut -f1))"
-            else
-              echo "Not found: $DIST/$f"
-            fi
-          done
+      cat "$GITHUB_WORKSPACE/build-artifacts.txt"
 
-          echo "=== Exported images ==="
-          ls -lh "$OUT"
+  - name: Upload build logs and configuration
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: ace3pro-xpad-build-results
+      path: |
+        official-build.log
+        config-files.txt
+        build-artifacts.txt
+        kernel-work/kernel_platform/out/**/.config
+      if-no-files-found: warn
+      retention-days: 7
 
-          if ! find "$OUT" -type f -size +0c -print -quit | grep -q .; then
-            echo "ERROR: No kernel images were collected."
-            exit 1
-          fi
+  - name: Collect compiled kernel images
+    if: success()
+    working-directory: kernel-work
+    shell: bash
+    run: |
+      set -eu
 
-      - name: Upload compiled kernel images
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ace3pro-kernel-images
-          path: kernel-images/
-          if-no-files-found: error
-          retention-days: 7
-          compression-level: 0
+      DIST="kernel_platform/out/msm-kernel-pineapple-gki/dist"
+      OUT="$GITHUB_WORKSPACE/kernel-images"
+      mkdir -p "$OUT"
+
+      for f in boot.img vendor_boot.img Image Image.gz Image.lz4; do
+        if [ -s "$DIST/$f" ]; then
+          cp "$DIST/$f" "$OUT/"
+          echo "Collected: $f ($(du -h "$OUT/$f" | cut -f1))"
+        else
+          echo "Not found: $DIST/$f"
+        fi
+      done
+
+      ls -lh "$OUT"
+
+      if ! find "$OUT" -type f -size +0c -print -quit | grep -q .; then
+        echo "ERROR: No kernel images were collected."
+        exit 1
+      fi
+
+  - name: Upload compiled kernel images
+    if: success()
+    uses: actions/upload-artifact@v4
+    with:
+      name: ace3pro-kernel-images
+      path: kernel-images/
+      if-no-files-found: error
+      retention-days: 7
+      compression-level: 0
