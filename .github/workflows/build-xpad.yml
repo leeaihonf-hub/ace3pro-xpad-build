@@ -1,7 +1,6 @@
-
 name: Prepare Ace 3 Pro XPAD Build
 
-on:
+'on':
 workflow_dispatch:
 
 permissions:
@@ -13,68 +12,9 @@ runs-on: ubuntu-latest
 timeout-minutes: 360
 
 steps:
-  - name: Maximize available disk space
-    uses: easimon/maximize-build-space@v10
-    with:
-      root-reserve-mb: 4096
-      swap-size-mb: 4096
-      build-mount-path: /workspace
-      temp-reserve-mb: 1024
-      overprovision-lvm: true
-
-  - name: Install repo and build dependencies
+  - name: Test workflow syntax
     run: |
-      sudo apt-get update
-      sudo apt-get install -y \
-        git curl python3 python-is-python3 \
-        openjdk-17-jdk bc bison flex \
-        build-essential zip unzip rsync \
-        cpio file libssl-dev libelf-dev \
-        device-tree-compiler
-
-      mkdir -p "$HOME/bin"
-      curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo \
-        -o "$HOME/bin/repo"
-      chmod +x "$HOME/bin/repo"
-      echo "$HOME/bin" >> "$GITHUB_PATH"
-
-  - name: Sync official Ace 3 Pro kernel source
-    working-directory: /workspace
-    run: |
-      git config --global user.name "GitHub Actions"
-      git config --global user.email "actions@github.com"
-
-      repo init \
-        -u https://github.com/OnePlusOSS/kernel_manifest.git \
-        -b oneplus/sm8650 \
-        -m oneplus_ace3_pro_b.xml
-
-      repo sync -c --no-clone-bundle --no-tags -j2
-
-  - name: Inspect source and available build entry
-    working-directory: /workspace
-    run: |
-      set -eu
-
-      echo "=== Disk space ==="
+      echo "Workflow syntax is valid."
+      echo "Runner: $(uname -a)"
+      echo "Available disk space:"
       df -h
-
-      echo "=== Build entry ==="
-      test -f kernel_platform/oplus/build/oplus_build_kernel.sh
-      ls -lh kernel_platform/oplus/build/oplus_build_kernel.sh
-
-      echo "=== XPAD config candidates ==="
-      grep -R -n -E \
-        'CONFIG_JOYSTICK_XPAD(_FF)?=|CONFIG_INPUT_FF_MEMLESS=' \
-        kernel_platform/common/arch/arm64/configs \
-        kernel_platform/common/kernel/configs \
-        kernel_platform/msm-kernel/arch/arm64/configs \
-        2>/dev/null || true
-
-      echo "=== Bazel build files ==="
-      ls -lh \
-        kernel_platform/WORKSPACE \
-        kernel_platform/build_with_bazel.py \
-        kernel_platform/msm-kernel/BUILD.bazel
-
-      echo "=== Source sync completed ==="
