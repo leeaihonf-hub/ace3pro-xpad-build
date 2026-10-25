@@ -1,4 +1,4 @@
-name: Ace 3 Pro XPAD Source Check
+name: Ace 3 Pro XPAD Full Source Check
 
 'on':
   workflow_dispatch:
@@ -7,53 +7,76 @@ permissions:
   contents: read
 
 jobs:
-  config:
+  source-check:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
-      - name: Install dependencies
+      - name: Install repo and dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git
+          sudo apt-get install -y git curl python3
+          mkdir -p "$HOME/bin"
+          curl -fL https://storage.googleapis.com/git-repo-downloads/repo \
+            -o "$HOME/bin/repo"
+          chmod +x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
 
-      - name: Clone OnePlus kernel common
+      - name: Initialize official manifest
         run: |
           set -eux
-          git clone --depth 1 \
-            --branch oneplus/sm8650_b_16.0.0_ace_3_pro \
-            https://github.com/OnePlusOSS/android_kernel_common_oneplus_sm8650.git \
-            kernel-common
+          mkdir kernel-work
+          cd kernel-work
+          repo init \
+            -u https://github.com/OnePlusOSS/kernel_manifest.git \
+            -b oneplus/sm8650 \
+            -m oneplus_ace3_pro_b.xml \
+            --depth=1
 
-      - name: Check missing Kconfig and related source
+      - name: Sync official kernel sources
+        working-directory: kernel-work
+        run: |
+          set -eux
+          repo sync -c -j2 --no-clone-bundle --no-tags
+
+      - name: Inspect build entry and XPAD settings
+        working-directory: kernel-work
         run: |
           set -eu
-          cd kernel-common
 
-          echo "=== Expected Kconfig path ==="
-          if [ -f kernel/oplus_cpu/sched/Kconfig ]; then
-            echo "FOUND in common repository"
-          else
-            echo "NOT FOUND in common repository"
-          fi
+          echo "=== Official build script ==="
+          ls -l kernel_platform/oplus/build/oplus_build_kernel.sh
+          sed -n '1,200p' kernel_platform/oplus/build/oplus_build_kernel.sh
 
-          echo "=== Search tracked source for scheduler Kconfig ==="
-          git ls-files '*oplus_cpu*' '*sched/Kconfig*' | head -200 || true
+          echo "=== XPAD driver options ==="
+          grep -n -A35 -B5 'config JOYSTICK_XPAD' \
+            kernel_platform/common/drivers/input/joystick/Kconfig
 
-          echo "=== Check kernel manifest ==="
-          cd ..
-          curl -fL \
-            https://raw.githubusercontent.com/OnePlusOSS/kernel_manifest/oneplus/sm8650/oneplus_ace3_pro_b.xml \
-            -o oneplus_ace3_pro_b.xml
-          cat oneplus_ace3_pro_b.xml
+          echo "=== Existing XPAD configuration fragments ==="
+          grep -R -n \
+            --include='*config*' \
+            --include='*.fragment' \
+            'CONFIG_JOYSTICK_XPAD' \
+            kernel_platform/common/arch/arm64/configs \
+            kernel_platform/common/kernel/configs \
+            kernel_platform/msm-kernel/arch/arm64/configs \
+            2>/dev/null || true
 
-      - name: Upload diagnostic files
+          echo "=== Build scripts and device config references ==="
+          grep -R -n \
+            --include='*.sh' \
+            --include='BUILD.bazel' \
+            --include='*.bzl' \
+            'oplus_build_kernel.sh\|pineapple.*gki' \
+            kernel_platform/oplus/build \
+            kernel_platform 2>/dev/null | head -100 || true
+
+      - name: Upload source inspection results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: xpad-source-diagnostics
+          name: ace3pro-xpad-full-source-check
           path: |
-            oneplus_ace3_pro_b.xml
-            kernel-common/drivers/input/joystick/Kconfig
-            kernel-common/kernel/configs/android-recommended.config
+            kernel-work/kernel_platform/oplus/build/oplus_build_kernel.sh
+            kernel-work/kernel_platform/common/drivers/input/joystick/Kconfig
           if-no-files-found: warn
