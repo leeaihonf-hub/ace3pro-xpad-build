@@ -1,13 +1,13 @@
 name: XPAD Build Test
 
 'on':
-push:
-branches:
-- main
+ push:
+  branches:
+   - main
 
 jobs:
-test:
-runs-on: ubuntu-latest
-steps:
-- name: Check runner
-run: echo "Workflow syntax OK"
+ test:
+  runs-on: ubuntu-latest
+  steps:
+   - name: Check runner
+   run: echo "Workflow syntax OK"
