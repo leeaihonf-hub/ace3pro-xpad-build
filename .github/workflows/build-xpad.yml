@@ -1,13 +1,19 @@
-name: XPAD Build Test
+
+name: Verify Ace 3 Pro Kernel Source
 
 'on':
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 jobs:
-  test:
+  verify:
     runs-on: ubuntu-latest
     steps:
-      - name: Check runner
-        run: echo "Workflow syntax OK"
+      - name: Check official kernel branch
+        run: |
+          git ls-remote --exit-code --heads https://github.com/OnePlusOSS/android_kernel_common_oneplus_sm8650.git oneplus/sm8650_b_16.0.0_ace_3_pro
+
+      - name: Check official manifest
+        run: |
+          git ls-remote --exit-code --heads https://github.com/OnePlusOSS/kernel_manifest.git oneplus/sm8650
+          curl -fL https://raw.githubusercontent.com/OnePlusOSS/kernel_manifest/oneplus/sm8650/oneplus_ace3_pro_b.xml -o manifest.xml
+          grep -E 'android_kernel_common_oneplus_sm8650|android_kernel_oneplus_sm8650|android_kernel_modules_and_devicetree_oneplus_sm8650' manifest.xml
