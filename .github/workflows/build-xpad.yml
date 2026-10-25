@@ -2,6 +2,9 @@ name: XPAD Build Test
 
 on: [workflow_dispatch]
 
-jobs:test:runs-on: ubuntu-lateststeps:
+jobs:
+test:
+runs-on: ubuntu-latest
+steps:
 - name: Check runner
 run: echo "Workflow syntax OK"
