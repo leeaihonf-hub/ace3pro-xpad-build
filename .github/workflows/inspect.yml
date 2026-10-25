@@ -13,43 +13,28 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Checkout common kernel source
+      - name: Checkout kernel source
         run: |
           git clone --depth 1 \
             --branch oneplus/sm8650_b_16.0.0_ace_3_pro \
             https://github.com/OnePlusOSS/android_kernel_common_oneplus_sm8650.git \
             common
 
-      - name: Checkout kernel modules source
+      - name: Check configuration merge flow
+        working-directory: common
         run: |
-          git clone --depth 1 \
-            --branch oneplus/sm8650_b_16.0.0_ace_3_pro \
-            https://github.com/OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8650.git \
-            modules
+          echo "=== Recommended config ==="
+          sed -n '75,95p' kernel/configs/android-recommended.config
 
-      - name: Inspect ARM64 kernel configuration
-        run: |
-          echo "=== ARM64 GKI xpad settings ==="
-          grep -n -E 'CONFIG_JOYSTICK_XPAD|CONFIG_INPUT_FF_MEMLESS' \
-            common/arch/arm64/configs/gki_defconfig || true
+          echo "=== GKI build config ==="
+          sed -n '1,220p' build.config.gki.aarch64
 
-          echo "=== All xpad FF config references ==="
-          grep -R -n -E 'CONFIG_JOYSTICK_XPAD_FF|JOYSTICK_XPAD_FF' \
-            common modules \
-            --exclude-dir=.git \
-            --exclude='*.c' \
-            --exclude='*.h' \
-            --exclude='*.o' \
-            --exclude='*.a' \
-            --exclude='*.so' \
-            2>/dev/null | head -n 150 || true
+          echo "=== References to recommended config ==="
+          grep -R -n -E 'android-recommended\.config|merge_config\.sh|KCONFIG_CONFIG|POST_DEFCONFIG_CMDS|DEFCONFIG' \
+            build.config* build scripts 2>/dev/null \
+            | head -n 160 || true
 
-          echo "=== ARM64 config files ==="
-          find common/arch/arm64/configs -maxdepth 2 -type f \
-            | head -n 100
-
-          echo "=== Kernel build entry points ==="
-          find common -maxdepth 3 -type f \
-            \( -name 'build.config*' -o -name 'BUILD.bazel' \
-            -o -name 'build.sh' -o -name 'Makefile' \) \
-            -print | head -n 100
+          echo "=== xpad FF config declarations ==="
+          grep -R -n 'JOYSTICK_XPAD_FF' \
+            kernel/configs arch/arm64/configs drivers/input/joystick/Kconfig \
+            2>/dev/null | head -n 80 || true
