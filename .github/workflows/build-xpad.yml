@@ -1,3 +1,4 @@
+
 name: Ace 3 Pro XPAD Kernel Build
 
 'on':
@@ -46,32 +47,3 @@ jobs:
           grep -R -n 'CONFIG_JOYSTICK_XPAD_FF' \
             kernel-common/common/kernel/configs \
             kernel-common/common/arch/arm64/configs || true
-
-  build:
-    needs: prepare
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Setup repo & sync kernel source
-        run: |
-          set -eux
-          repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b oneplus/sm8650 -m oneplus_ace3_pro_b.xml
-          repo sync -j$(nproc)
-
-      - name: Build kernel with Kleaf
-        run: |
-          set -eux
-          cd kernel_platform
-          bazel build //:ace3pro_bootimage
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel-build-artifacts
-          path: |
-            bazel-bin/boot.img
-            bazel-bin/vendor_boot.img
-            out/.config
