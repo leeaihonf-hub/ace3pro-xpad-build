@@ -1,159 +1,122 @@
-name: Ace 3 Pro XPAD Kernel Build
 
-'on':
-workflow_dispatch:
+name: Diagnose Ace 3 Pro Xbox Controller Rumble
+
+on:
+  workflow_dispatch:
 
 permissions:
-contents: read
+  contents: read
 
 jobs:
-build:
-runs-on: ubuntu-24.04
-timeout-minutes: 360
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
 
-steps:
-  - name: Install dependencies
-    run: |
-      sudo apt-get update
-      sudo apt-get install -y \
-        git curl python3 bc bison flex \
-        build-essential libssl-dev libelf-dev \
-        zip unzip rsync device-tree-compiler
+    steps:
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            git curl python3 \
+            build-essential bc bison flex \
+            libssl-dev libelf-dev \
+            zip unzip rsync
 
-  - name: Install repo tool
-    run: |
-      set -eux
-      mkdir -p "$HOME/bin"
-      curl -fL \
-        https://storage.googleapis.com/git-repo-downloads/repo \
-        -o "$HOME/bin/repo"
-      chmod +x "$HOME/bin/repo"
-      echo "$HOME/bin" >> "$GITHUB_PATH"
+      - name: Install repo tool
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -fsSL \
+            https://storage.googleapis.com/git-repo-downloads/repo \
+            -o repo
+          chmod +x repo
+          sudo install repo /usr/local/bin/repo
+          repo --version
 
-  - name: Initialize official OnePlus manifest
-    run: |
-      set -eux
-      mkdir -p kernel-work
-      cd kernel-work
-      repo init \
-        -u https://github.com/OnePlusOSS/kernel_manifest.git \
-        -b oneplus/sm8650 \
-        -m oneplus_ace3_pro_b.xml \
-        --depth=1
+      - name: Initialize official OnePlus source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/kernel-work"
+          cd "$GITHUB_WORKSPACE/kernel-work"
 
-  - name: Sync official kernel sources
-    working-directory: kernel-work
-    run: |
-      set -eux
-      repo sync -c -j2 --no-clone-bundle --no-tags
+          repo init \
+            -u https://github.com/OnePlusOSS/kernel_manifest.git \
+            -b oneplus/sm8650 \
+            -m oneplus_ace3_pro_b.xml
 
-  - name: Inspect XPAD Kconfig and build configuration
-    working-directory: kernel-work
-    shell: bash
-    run: |
-      set -eu
+          repo sync -c -j2 --no-clone-bundle --no-tags
 
-      KCONFIG="kernel_platform/common/drivers/input/joystick/Kconfig"
-      test -f "$KCONFIG"
+      - name: Diagnose kernel config entry
+        working-directory: kernel-work
+        shell: bash
+        run: |
+          set -u
+          LOG="$GITHUB_WORKSPACE/xpad-config-diagnosis.txt"
+          exec > >(tee "$LOG") 2>&1
 
-      echo "=== XPAD Kconfig ==="
-      grep -n -A25 -B5 'config JOYSTICK_XPAD' "$KCONFIG"
+          echo "========== 1. XPAD Kconfig =========="
+          grep -n -A30 -B5 \
+            'config JOYSTICK_XPAD' \
+            kernel_platform/common/drivers/input/joystick/Kconfig \
+            2>/dev/null || true
 
-      echo "=== Official build script ==="
-      test -f kernel_platform/oplus/build/oplus_build_kernel.sh
-      sed -n '1,220p' \
-        kernel_platform/oplus/build/oplus_build_kernel.sh
+          echo
+          echo "========== 2. Official build script =========="
+          sed -n '1,240p' \
+            kernel_platform/oplus/build/oplus_build_kernel.sh \
+            2>/dev/null || true
 
-      echo "=== Pineapple GKI config references ==="
-      grep -RIn \
-        --include='*.bzl' \
-        --include='BUILD*' \
-        --include='*.sh' \
-        --include='*.config' \
-        -E 'pineapple_gki|gki_defconfig|KERNEL_CONFIG|defconfig' \
-        kernel_platform/msm-kernel \
-        kernel_platform/oplus/build \
-        2>/dev/null | head -200 || true
+          echo
+          echo "========== 3. Config and build files =========="
+          find kernel_platform \
+            -type f \
+            \( -name '*defconfig*' \
+            -o -name '*fragment*' \
+            -o -name 'build.config*' \
+            -o -name 'BUILD.bazel' \
+            -o -name '*.bzl' \) \
+            -not -path '*/out/*' \
+            -not -path '*/.git/*' \
+            2>/dev/null | head -500 || true
 
-  - name: Build official Ace 3 Pro GKI kernel
-    working-directory: kernel-work
-    shell: bash
-    run: |
-      set -o pipefail
-      bash kernel_platform/oplus/build/oplus_build_kernel.sh pineapple gki \
-        2>&1 | tee "$GITHUB_WORKSPACE/official-build.log"
+          echo
+          echo "========== 4. Pineapple GKI references =========="
+          grep -RIn \
+            --exclude-dir=.git \
+            --exclude-dir=out \
+            --include='*.sh' \
+            --include='*.bzl' \
+            --include='BUILD*' \
+            --include='*.config' \
+            --include='*.mk' \
+            -E 'pineapple_gki|gki_defconfig|KERNEL_CONFIG|DEFCONFIG|defconfig' \
+            kernel_platform/msm-kernel \
+            kernel_platform/oplus/build \
+            kernel_platform/common \
+            2>/dev/null | head -500 || true
 
-  - name: Inspect generated XPAD config
-    if: always()
-    working-directory: kernel-work
-    shell: bash
-    run: |
-      set +e
+          echo
+          echo "========== 5. XPAD config settings in source =========="
+          grep -RIn \
+            --exclude-dir=.git \
+            --exclude-dir=out \
+            --include='*defconfig*' \
+            --include='*.config' \
+            --include='*.fragment' \
+            -E 'CONFIG_JOYSTICK_XPAD(=|_FF=)|CONFIG_INPUT_FF_MEMLESS=' \
+            kernel_platform \
+            2>/dev/null | head -300 || true
 
-      find kernel_platform/out -type f -name .config \
-        -print > "$GITHUB_WORKSPACE/config-files.txt"
+          echo
+          echo "========== Diagnosis finished =========="
 
-      while IFS= read -r config; do
-        echo "=== $config ==="
-        grep -E \
-          '^(CONFIG_JOYSTICK_XPAD=|CONFIG_JOYSTICK_XPAD_FF=|CONFIG_INPUT_FF_MEMLESS=|# CONFIG_JOYSTICK_XPAD_FF is not set)' \
-          "$config" || true
-      done < "$GITHUB_WORKSPACE/config-files.txt"
-
-      echo "=== Build output candidates ==="
-      find kernel_platform/out -type f \
-        \( -name Image -o -name Image.gz -o -name Image.lz4 \
-           -o -name boot.img -o -name vendor_boot.img \) \
-        -print > "$GITHUB_WORKSPACE/build-artifacts.txt"
-
-      cat "$GITHUB_WORKSPACE/build-artifacts.txt"
-
-  - name: Upload build logs and configuration
-    if: always()
-    uses: actions/upload-artifact@v4
-    with:
-      name: ace3pro-xpad-build-results
-      path: |
-        official-build.log
-        config-files.txt
-        build-artifacts.txt
-        kernel-work/kernel_platform/out/**/.config
-      if-no-files-found: warn
-      retention-days: 7
-
-  - name: Collect compiled kernel images
-    if: success()
-    working-directory: kernel-work
-    shell: bash
-    run: |
-      set -eu
-
-      DIST="kernel_platform/out/msm-kernel-pineapple-gki/dist"
-      OUT="$GITHUB_WORKSPACE/kernel-images"
-      mkdir -p "$OUT"
-
-      for f in boot.img vendor_boot.img Image Image.gz Image.lz4; do
-        if [ -s "$DIST/$f" ]; then
-          cp "$DIST/$f" "$OUT/"
-          echo "Collected: $f ($(du -h "$OUT/$f" | cut -f1))"
-        else
-          echo "Not found: $DIST/$f"
-        fi
-      done
-
-      ls -lh "$OUT"
-
-      if ! find "$OUT" -type f -size +0c -print -quit | grep -q .; then
-        echo "ERROR: No kernel images were collected."
-        exit 1
-      fi
-
-  - name: Upload compiled kernel images
-    if: success()
-    uses: actions/upload-artifact@v4
-    with:
-      name: ace3pro-kernel-images
-      path: kernel-images/
-      if-no-files-found: error
-      retention-days: 7
-      compression-level: 0
+      - name: Upload diagnosis report
+        uses: actions/upload-artifact@v4
+        with:
+          name: ace3pro-xpad-config-diagnosis
+          path: xpad-config-diagnosis.txt
+          if-no-files-found: error
+          retention-days: 7
