@@ -1,4 +1,5 @@
-name: Ace 3 Pro XPAD Kernel Build
+
+name: Ace 3 Pro XPAD Config Test
 
 'on':
   workflow_dispatch:
@@ -7,36 +8,17 @@ permissions:
   contents: read
 
 jobs:
-  prepare:
+  config:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-
     steps:
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git curl python3
+          sudo apt-get install -y git make gcc flex bison bc \
+            libssl-dev libelf-dev python3
 
-      - name: Verify official source branches
-        run: |
-          set -eux
-          git ls-remote --exit-code --heads \
-            https://github.com/OnePlusOSS/android_kernel_common_oneplus_sm8650.git \
-            oneplus/sm8650_b_16.0.0_ace_3_pro
-          git ls-remote --exit-code --heads \
-            https://github.com/OnePlusOSS/kernel_manifest.git \
-            oneplus/sm8650
-
-      - name: Download official Ace 3 Pro manifest
-        run: |
-          set -eux
-          curl -fL \
-            https://raw.githubusercontent.com/OnePlusOSS/kernel_manifest/oneplus/sm8650/oneplus_ace3_pro_b.xml \
-            -o manifest.xml
-          echo "=== Manifest projects ==="
-          grep '<project ' manifest.xml
-
-      - name: Clone official common kernel source
+      - name: Clone kernel source
         run: |
           set -eux
           git clone --depth 1 \
@@ -44,29 +26,19 @@ jobs:
             https://github.com/OnePlusOSS/android_kernel_common_oneplus_sm8650.git \
             kernel-common
 
-      - name: Locate XPAD configuration
+      - name: Generate ARM64 GKI config
+        working-directory: kernel-common
+        run: |
+          set -eux
+          make ARCH=arm64 gki_defconfig
+
+      - name: Check final XPAD config
+        working-directory: kernel-common
         run: |
           set -eu
-          echo "=== Repository top-level ==="
-          ls -la kernel-common
-
-          echo "=== Find kernel configuration files ==="
-          find kernel-common -type f \( \
-            -name 'gki_defconfig' -o \
-            -name 'android-recommended.config' -o \
-            -name 'Kconfig' \
-          \) | head -200
-
-          echo "=== Search XPAD force feedback options ==="
-          grep -R -n -E \
-            'CONFIG_JOYSTICK_XPAD(_FF|_LEDS)?|config JOYSTICK_XPAD' \
-            kernel-common \
-            --include='*defconfig' \
-            --include='*.config' \
-            --include='Kconfig' || true
-
-          echo "=== Locate xpad driver source ==="
-          find kernel-common -type f \
-            \( -name 'xpad.c' -o -name 'Kconfig' \) \
-            | grep -E 'xpad\.c$|drivers/input/joystick/Kconfig$' \
-            | head -100
+          echo "=== Final .config ==="
+          grep -E '^CONFIG_(JOYSTICK_XPAD|JOYSTICK_XPAD_FF|JOYSTICK_XPAD_LEDS|INPUT_FF_MEMLESS)=' .config || true
+          echo "=== Source Kconfig dependencies ==="
+          sed -n '294,325p' drivers/input/joystick/Kconfig
+          echo "=== Recommended config ==="
+          grep -n 'CONFIG_JOYSTICK_XPAD' kernel/configs/android-recommended.config || true
