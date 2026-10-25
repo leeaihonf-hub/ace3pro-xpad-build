@@ -24,7 +24,8 @@ jobs:
         working-directory: common
         run: |
           echo "=== Xpad Kconfig ==="
-          grep -n -A 18 -B 5 'config JOYSTICK_XPAD' drivers/input/joystick/Kconfig || true
+          grep -n -A 18 -B 5 'config JOYSTICK_XPAD' \
+            drivers/input/joystick/Kconfig || true
 
           echo "=== Force feedback references ==="
           grep -n -E 'CONFIG_JOYSTICK_XPAD_FF|JOYSTICK_XPAD_FF' \
@@ -36,7 +37,8 @@ jobs:
             drivers/input/joystick/xpad.c | head -n 100 || true
 
           echo "=== Relevant source files ==="
-          find drivers/input/joystick -maxdepth 1 -iname '*xpad*' -type f
+          find drivers/input/joystick -maxdepth 1 \
+            -iname '*xpad*' -type f
 
       - name: Check modules repository configuration
         run: |
@@ -45,6 +47,18 @@ jobs:
             https://github.com/OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8650.git \
             modules
 
-          echo "=== Kernel config candidates ==="
-          find modules -type f \( -name '*defconfig' -o -name 'Kconfig' \) \
-            | head -n 80
+          echo "=== Relevant kernel configs ==="
+          find common modules \
+            -path '*/.git' -prune -o \
+            -type f \( -name '*defconfig' -o -name '*defconfig.fragment' \) \
+            -print \
+            | grep -v '/wlan/' \
+            | grep -Ei 'pineapple|sm8650|gki|vendor|kona' \
+            | head -n 100 || true
+
+          echo "=== Existing xpad FF settings ==="
+          grep -R -n -E 'CONFIG_JOYSTICK_XPAD(_FF)?=' \
+            common modules \
+            --include='*defconfig*' \
+            --include='*.fragment' \
+            2>/dev/null | head -n 100 || true
