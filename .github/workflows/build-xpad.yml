@@ -1,4 +1,4 @@
-name: Ace 3 Pro XPAD Full Source Check
+name: Ace 3 Pro XPAD Kernel Build
 
 'on':
   workflow_dispatch:
@@ -7,25 +7,36 @@ permissions:
   contents: read
 
 jobs:
-  source-check:
+  build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 360
 
     steps:
-      - name: Install repo and dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git curl python3
+          sudo apt-get install -y \
+            git curl python3 \
+            bc bison flex \
+            build-essential \
+            libssl-dev libelf-dev \
+            zip unzip rsync \
+            device-tree-compiler
+
+      - name: Install repo tool
+        run: |
+          set -eux
           mkdir -p "$HOME/bin"
-          curl -fL https://storage.googleapis.com/git-repo-downloads/repo \
+          curl -fL \
+            https://storage.googleapis.com/git-repo-downloads/repo \
             -o "$HOME/bin/repo"
           chmod +x "$HOME/bin/repo"
           echo "$HOME/bin" >> "$GITHUB_PATH"
 
-      - name: Initialize official manifest
+      - name: Initialize official OnePlus manifest
         run: |
           set -eux
-          mkdir kernel-work
+          mkdir -p kernel-work
           cd kernel-work
           repo init \
             -u https://github.com/OnePlusOSS/kernel_manifest.git \
@@ -39,44 +50,59 @@ jobs:
           set -eux
           repo sync -c -j2 --no-clone-bundle --no-tags
 
-      - name: Inspect build entry and XPAD settings
+      - name: Check build script
         working-directory: kernel-work
         run: |
-          set -eu
-
+          set -eux
+          test -f kernel_platform/oplus/build/oplus_build_kernel.sh
           echo "=== Official build script ==="
-          ls -l kernel_platform/oplus/build/oplus_build_kernel.sh
-          sed -n '1,200p' kernel_platform/oplus/build/oplus_build_kernel.sh
-
-          echo "=== XPAD driver options ==="
-          grep -n -A35 -B5 'config JOYSTICK_XPAD' \
+          sed -n '1,220p' \
+            kernel_platform/oplus/build/oplus_build_kernel.sh
+          echo "=== XPAD configuration options ==="
+          grep -n -A25 -B5 'config JOYSTICK_XPAD' \
             kernel_platform/common/drivers/input/joystick/Kconfig
 
-          echo "=== Existing XPAD configuration fragments ==="
-          grep -R -n \
-            --include='*config*' \
-            --include='*.fragment' \
-            'CONFIG_JOYSTICK_XPAD' \
-            kernel_platform/common/arch/arm64/configs \
-            kernel_platform/common/kernel/configs \
-            kernel_platform/msm-kernel/arch/arm64/configs \
-            2>/dev/null || true
+      - name: Build official Ace 3 Pro GKI kernel
+        working-directory: kernel-work
+        shell: bash
+        run: |
+          set -o pipefail
+          bash kernel_platform/oplus/build/oplus_build_kernel.sh pineapple gki \
+            2>&1 | tee "$GITHUB_WORKSPACE/official-build.log"
 
-          echo "=== Build scripts and device config references ==="
-          grep -R -n \
-            --include='*.sh' \
-            --include='BUILD.bazel' \
-            --include='*.bzl' \
-            'oplus_build_kernel.sh\|pineapple.*gki' \
-            kernel_platform/oplus/build \
-            kernel_platform 2>/dev/null | head -100 || true
+      - name: Inspect generated XPAD config
+        if: always()
+        working-directory: kernel-work
+        shell: bash
+        run: |
+          set +e
+          find kernel_platform -type f -name .config \
+            -print > "$GITHUB_WORKSPACE/config-files.txt"
 
-      - name: Upload source inspection results
+          while IFS= read -r config; do
+            echo "=== $config ==="
+            grep -E \
+              '^(CONFIG_JOYSTICK_XPAD|CONFIG_JOYSTICK_XPAD_FF|CONFIG_INPUT_FF_MEMLESS)=' \
+              "$config"
+          done < "$GITHUB_WORKSPACE/config-files.txt"
+
+          echo "=== Search build output candidates ==="
+          find kernel_platform -type f \
+            \( -name Image -o -name Image.gz -o -name Image.lz4 \
+               -o -name boot.img -o -name vendor_boot.img \
+               -o -name '*.zip' \) \
+            -print > "$GITHUB_WORKSPACE/build-artifacts.txt"
+
+          cat "$GITHUB_WORKSPACE/build-artifacts.txt"
+
+      - name: Upload build logs and configuration
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ace3pro-xpad-full-source-check
+          name: ace3pro-xpad-build-results
           path: |
-            kernel-work/kernel_platform/oplus/build/oplus_build_kernel.sh
-            kernel-work/kernel_platform/common/drivers/input/joystick/Kconfig
+            official-build.log
+            config-files.txt
+            build-artifacts.txt
+            kernel-work/kernel_platform/**/.config
           if-no-files-found: warn
