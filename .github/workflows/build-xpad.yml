@@ -1,5 +1,4 @@
-
-name: Ace 3 Pro XPAD Config Test
+name: Ace 3 Pro XPAD Source Check
 
 'on':
   workflow_dispatch:
@@ -11,14 +10,14 @@ jobs:
   config:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+
     steps:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git make gcc flex bison bc \
-            libssl-dev libelf-dev python3
+          sudo apt-get install -y git
 
-      - name: Clone kernel source
+      - name: Clone OnePlus kernel common
         run: |
           set -eux
           git clone --depth 1 \
@@ -26,19 +25,35 @@ jobs:
             https://github.com/OnePlusOSS/android_kernel_common_oneplus_sm8650.git \
             kernel-common
 
-      - name: Generate ARM64 GKI config
-        working-directory: kernel-common
-        run: |
-          set -eux
-          make ARCH=arm64 gki_defconfig
-
-      - name: Check final XPAD config
-        working-directory: kernel-common
+      - name: Check missing Kconfig and related source
         run: |
           set -eu
-          echo "=== Final .config ==="
-          grep -E '^CONFIG_(JOYSTICK_XPAD|JOYSTICK_XPAD_FF|JOYSTICK_XPAD_LEDS|INPUT_FF_MEMLESS)=' .config || true
-          echo "=== Source Kconfig dependencies ==="
-          sed -n '294,325p' drivers/input/joystick/Kconfig
-          echo "=== Recommended config ==="
-          grep -n 'CONFIG_JOYSTICK_XPAD' kernel/configs/android-recommended.config || true
+          cd kernel-common
+
+          echo "=== Expected Kconfig path ==="
+          if [ -f kernel/oplus_cpu/sched/Kconfig ]; then
+            echo "FOUND in common repository"
+          else
+            echo "NOT FOUND in common repository"
+          fi
+
+          echo "=== Search tracked source for scheduler Kconfig ==="
+          git ls-files '*oplus_cpu*' '*sched/Kconfig*' | head -200 || true
+
+          echo "=== Check kernel manifest ==="
+          cd ..
+          curl -fL \
+            https://raw.githubusercontent.com/OnePlusOSS/kernel_manifest/oneplus/sm8650/oneplus_ace3_pro_b.xml \
+            -o oneplus_ace3_pro_b.xml
+          cat oneplus_ace3_pro_b.xml
+
+      - name: Upload diagnostic files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xpad-source-diagnostics
+          path: |
+            oneplus_ace3_pro_b.xml
+            kernel-common/drivers/input/joystick/Kconfig
+            kernel-common/kernel/configs/android-recommended.config
+          if-no-files-found: warn
