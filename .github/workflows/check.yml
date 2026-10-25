@@ -1,0 +1,37 @@
+
+name: Check Ace 3 Pro Kernel Build Environment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check runner resources
+        run: |
+          echo "=== CPU ==="
+          nproc
+          echo "=== MEMORY ==="
+          free -h
+          echo "=== DISK ==="
+          df -h /
+          echo "=== ARCHITECTURE ==="
+          uname -m
+
+      - name: Check kernel source repository
+        run: |
+          git ls-remote \
+            https://github.com/OnePlusOSS/android_kernel_common_oneplus_sm8650.git \
+            refs/heads/oneplus/sm8650_b_16.0.0_ace_3_pro
+
+      - name: Check kernel modules repository
+        run: |
+          git ls-remote \
+            https://github.com/OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8650.git \
+            refs/heads/oneplus/sm8650_b_16.0.0_ace_3_pro
