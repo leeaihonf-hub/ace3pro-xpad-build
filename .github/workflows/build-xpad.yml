@@ -1,196 +1,275 @@
-
 name: Ace 3 Pro XPAD Kernel Build
 
 'on':
-  workflow_dispatch:
+workflow_dispatch:
 
 permissions:
-  contents: read
+contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
+build:
+runs-on: ubuntu-24.04
+timeout-minutes: 360
 
-    steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            git curl python3 \
-            bc bison flex \
-            build-essential \
-            libssl-dev libelf-dev \
-            zip unzip rsync \
-            device-tree-compiler
+steps:
+  - name: Install dependencies
+    shell: bash
+    run: |
+      set -euxo pipefail
+      sudo apt-get update
+      sudo apt-get install -y \
+        git curl python3 \
+        bc bison flex \
+        build-essential \
+        libssl-dev libelf-dev \
+        zip unzip rsync \
+        device-tree-compiler
 
-      - name: Install repo tool
-        run: |
-          set -eux
-          mkdir -p "$HOME/bin"
-          curl -fL \
-            https://storage.googleapis.com/git-repo-downloads/repo \
-            -o "$HOME/bin/repo"
-          chmod +x "$HOME/bin/repo"
-          echo "$HOME/bin" >> "$GITHUB_PATH"
+  - name: Install repo tool
+    shell: bash
+    run: |
+      set -euxo pipefail
+      mkdir -p "$HOME/bin"
+      curl -fL \
+        https://storage.googleapis.com/git-repo-downloads/repo \
+        -o "$HOME/bin/repo"
+      chmod +x "$HOME/bin/repo"
+      echo "$HOME/bin" >> "$GITHUB_PATH"
 
-      - name: Initialize official OnePlus manifest
-        run: |
-          set -eux
-          mkdir -p "$GITHUB_WORKSPACE/kernel-work"
-          cd "$GITHUB_WORKSPACE/kernel-work"
-          repo init \
-            -u https://github.com/OnePlusOSS/kernel_manifest.git \
-            -b oneplus/sm8650 \
-            -m oneplus_ace3_pro_b.xml \
-            --depth=1
+      # Some OnePlus build scripts call /bin/repo directly.
+      sudo ln -sf "$HOME/bin/repo" /bin/repo
+      /bin/repo version
 
-      - name: Sync official kernel sources
-        working-directory: kernel-work
-        run: |
-          set -eux
-          repo sync -c -j2 --no-clone-bundle --no-tags
+  - name: Initialize official OnePlus manifest
+    shell: bash
+    run: |
+      set -euxo pipefail
+      mkdir -p "$GITHUB_WORKSPACE/kernel-work"
+      cd "$GITHUB_WORKSPACE/kernel-work"
 
-      - name: Enable XPAD rumble config
-        working-directory: kernel-work
-        shell: bash
-        run: |
-          set -eux
-          python3 - <<'PY'
-          from pathlib import Path
+      repo init \
+        -u https://github.com/OnePlusOSS/kernel_manifest.git \
+        -b oneplus/sm8650 \
+        -m oneplus_ace3_pro_b.xml \
+        --depth=1
 
-          paths = [
-              Path("kernel_platform/common/arch/arm64/configs/gki_defconfig"),
-              Path("kernel_platform/msm-kernel/arch/arm64/configs/gki_defconfig"),
-          ]
+  - name: Sync official kernel sources
+    working-directory: kernel-work
+    shell: bash
+    run: |
+      set -euxo pipefail
+      repo sync -c -j2 --no-clone-bundle --no-tags
 
-          for path in paths:
-              if not path.is_file():
-                  raise SystemExit(f"Missing config: {path}")
+  - name: Prepare build output directories
+    working-directory: kernel-work
+    shell: bash
+    run: |
+      set -euxo pipefail
 
-              lines = path.read_text().splitlines()
-              lines = [
-                  line for line in lines
-                  if not line.startswith("CONFIG_JOYSTICK_XPAD_FF=")
-                  and line != "# CONFIG_JOYSTICK_XPAD_FF is not set"
-                  and not line.startswith("CONFIG_INPUT_FF_MEMLESS=")
-                  and line != "# CONFIG_INPUT_FF_MEMLESS is not set"
-              ]
+      # Avoid the missing-directory mktemp error in the build script.
+      mkdir -p out/target/product/pineapple
 
-              if "CONFIG_JOYSTICK_XPAD=y" not in lines:
-                  lines.append("CONFIG_JOYSTICK_XPAD=y")
+      # Confirm the expected kernel configuration exists.
+      test -f \
+        kernel_platform/common/arch/arm64/configs/gki_defconfig
 
-              lines.extend([
-                  "CONFIG_JOYSTICK_XPAD_FF=y",
-                  "CONFIG_INPUT_FF_MEMLESS=y",
-              ])
+      echo "Build output directories prepared."
 
-              path.write_text("\n".join(lines) + "\n")
-              print(f"Updated {path}")
-          PY
+  - name: Enable XPAD rumble config
+    working-directory: kernel-work
+    shell: bash
+    run: |
+      set -euo pipefail
 
-      - name: Build official Ace 3 Pro GKI kernel
-        id: kernel_build
-        working-directory: kernel-work
-        shell: bash
-        run: |
-          set -o pipefail
-          bash kernel_platform/oplus/build/oplus_build_kernel.sh pineapple gki \
-            2>&1 | tee "$GITHUB_WORKSPACE/official-build.log"
+      python3 - <<'PY'
+      from pathlib import Path
 
-      - name: Inspect final XPAD config
-        if: always()
-        working-directory: kernel-work
-        shell: bash
-        run: |
-          set +e
-          : > "$GITHUB_WORKSPACE/config-files.txt"
-          : > "$GITHUB_WORKSPACE/config-check.txt"
+      path = Path(
+          "kernel_platform/common/arch/arm64/configs/gki_defconfig"
+      )
 
-          find "$GITHUB_WORKSPACE/kernel-work/kernel_platform" \
-            -type f -name .config \
-            -print > "$GITHUB_WORKSPACE/config-files.txt" 2>/dev/null
+      if not path.is_file():
+          raise SystemExit(f"Missing config: {path}")
 
-          while IFS= read -r config; do
-            [ -f "$config" ] || continue
-            {
-              echo "=== $config ==="
-              grep -E \
-                '^(CONFIG_JOYSTICK_XPAD=|CONFIG_JOYSTICK_XPAD_FF=|CONFIG_INPUT_FF_MEMLESS=|# CONFIG_JOYSTICK_XPAD_FF is not set|# CONFIG_INPUT_FF_MEMLESS is not set)' \
-                "$config" || true
-            } | tee -a "$GITHUB_WORKSPACE/config-check.txt"
-          done < "$GITHUB_WORKSPACE/config-files.txt"
+      lines = path.read_text().splitlines()
 
-          if [ ! -s "$GITHUB_WORKSPACE/config-files.txt" ]; then
-            echo "No .config files found." \
-              | tee "$GITHUB_WORKSPACE/config-check.txt"
-          fi
+      # Remove previous XPAD_FF entries and any explicit
+      # INPUT_FF_MEMLESS override to avoid duplicate or redundant lines.
+      lines = [
+          line for line in lines
+          if not line.startswith("CONFIG_JOYSTICK_XPAD_FF=")
+          and line != "# CONFIG_JOYSTICK_XPAD_FF is not set"
+          and not line.startswith("CONFIG_INPUT_FF_MEMLESS=")
+          and line != "# CONFIG_INPUT_FF_MEMLESS is not set"
+      ]
 
-      - name: Search and collect kernel images
-        if: always()
-        shell: bash
-        run: |
-          set +e
-          ROOT="$GITHUB_WORKSPACE"
-          OUT="$ROOT/kernel-images"
-          mkdir -p "$OUT"
-          : > "$ROOT/found-images.txt"
+      try:
+          xpad_index = lines.index("CONFIG_JOYSTICK_XPAD=y")
+      except ValueError:
+          raise SystemExit(
+              "CONFIG_JOYSTICK_XPAD=y not found in gki_defconfig"
+          )
 
-          echo "=== Search image files and symlinks ==="
+      # Keep the rumble option next to the main XPAD option.
+      lines.insert(
+          xpad_index + 1,
+          "CONFIG_JOYSTICK_XPAD_FF=y"
+      )
 
-          find "$ROOT/kernel-work" \
-            \( -type f -o -type l \) \
-            \( -name boot.img -o -name vendor_boot.img \
-               -o -name Image -o -name Image.gz \
-               -o -name Image.lz4 \) \
-            -print 2>/dev/null > "$ROOT/found-images.txt"
+      path.write_text("\n".join(lines) + "\n")
 
-          cat "$ROOT/found-images.txt"
+      print(f"Updated {path}")
+      print("XPAD rumble requested: CONFIG_JOYSTICK_XPAD_FF=y")
+      PY
 
-          while IFS= read -r f; do
-            [ -e "$f" ] || continue
-            name="$(basename "$f")"
-            case "$name" in
-              boot.img|vendor_boot.img|Image|Image.gz|Image.lz4)
-                if [ -s "$f" ] && [ ! -e "$OUT/$name" ]; then
-                  cp -L "$f" "$OUT/$name"
-                  echo "Collected: $f"
-                fi
-                ;;
-            esac
-          done < "$ROOT/found-images.txt"
+  - name: Build official Ace 3 Pro GKI kernel
+    id: kernel_build
+    working-directory: kernel-work
+    shell: bash
+    run: |
+      set -o pipefail
 
-          echo "=== Check known dist directories ==="
-          find "$ROOT/kernel-work" -type d -name dist \
-            -print 2>/dev/null || true
+      echo "=== Build target: pineapple gki ==="
+      echo "=== Start official OnePlus build ==="
 
-          echo "=== Collected image files ==="
-          ls -lh "$OUT"
+      bash kernel_platform/oplus/build/oplus_build_kernel.sh \
+        pineapple gki \
+        2>&1 | tee "$GITHUB_WORKSPACE/official-build.log"
 
-          if ! find "$OUT" -type f -size +0c -print -quit | grep -q .; then
-            echo "No images collected. See official-build.log and found-images.txt."
-          fi
+  - name: Inspect final XPAD config
+    if: always()
+    shell: bash
+    run: |
+      set +e
 
-      - name: Upload compiled kernel images
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ace3pro-kernel-images
-          path: kernel-images/
-          if-no-files-found: warn
-          retention-days: 7
-          compression-level: 0
+      ROOT="$GITHUB_WORKSPACE"
+      PLATFORM="$ROOT/kernel-work/kernel_platform"
 
-      - name: Upload build logs and configuration
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ace3pro-xpad-build-results
-          path: |
-            official-build.log
-            config-files.txt
-            config-check.txt
-            found-images.txt
-            kernel-work/kernel_platform/**/.config
-          if-no-files-found: warn
-          retention-days: 7
+      : > "$ROOT/config-files.txt"
+      : > "$ROOT/config-check.txt"
+
+      if [ -d "$PLATFORM" ]; then
+        find "$PLATFORM" \
+          -type f -name .config \
+          -print > "$ROOT/config-files.txt" 2>/dev/null
+      fi
+
+      while IFS= read -r config; do
+        [ -f "$config" ] || continue
+
+        {
+          echo "=== $config ==="
+          grep -E \
+            '^(CONFIG_JOYSTICK_XPAD=|CONFIG_JOYSTICK_XPAD_FF=|CONFIG_INPUT_FF_MEMLESS=|# CONFIG_JOYSTICK_XPAD_FF is not set|# CONFIG_INPUT_FF_MEMLESS is not set)' \
+            "$config" || true
+          echo
+        } | tee -a "$ROOT/config-check.txt"
+      done < "$ROOT/config-files.txt"
+
+      if [ ! -s "$ROOT/config-files.txt" ]; then
+        echo "No .config files found." \
+          | tee "$ROOT/config-check.txt"
+      fi
+
+  - name: Search and collect completed kernel images
+    if: always()
+    shell: bash
+    env:
+      BUILD_OUTCOME: ${{ steps.kernel_build.outcome }}
+    run: |
+      set +e
+
+      ROOT="$GITHUB_WORKSPACE"
+      WORK="$ROOT/kernel-work"
+      PLATFORM="$WORK/kernel_platform"
+      DIST="$PLATFORM/out/msm-kernel-pineapple-gki/dist"
+      OUT="$ROOT/kernel-images"
+
+      mkdir -p "$OUT"
+      : > "$ROOT/found-images.txt"
+
+      echo "=== Official build result: $BUILD_OUTCOME ==="
+      echo "=== Expected dist directory ==="
+      echo "$DIST"
+
+      if [ -d "$DIST" ]; then
+        find "$DIST" -maxdepth 2 -type f \
+          \( -name boot.img \
+             -o -name vendor_boot.img \
+             -o -name Image \
+             -o -name Image.gz \
+             -o -name Image.lz4 \) \
+          -print >> "$ROOT/found-images.txt" 2>/dev/null
+      fi
+
+      echo "=== Search Bazel outputs for diagnosis ==="
+      if [ -d "$PLATFORM/out/bazel" ]; then
+        find "$PLATFORM/out/bazel" \
+          \( -type f -o -type l \) \
+          \( -name boot.img \
+             -o -name vendor_boot.img \
+             -o -name Image \
+             -o -name Image.gz \
+             -o -name Image.lz4 \) \
+          -print >> "$ROOT/found-images.txt" 2>/dev/null
+      fi
+
+      sort -u "$ROOT/found-images.txt" \
+        -o "$ROOT/found-images.txt"
+
+      cat "$ROOT/found-images.txt"
+
+      # Never treat intermediate Bazel files as a completed build
+      # when the official build command failed.
+      if [ "$BUILD_OUTCOME" != "success" ]; then
+        echo "Official build failed; intermediate images will not be packaged."
+      else
+        while IFS= read -r f; do
+          [ -f "$f" ] || continue
+          [ -s "$f" ] || continue
+
+          case "$(basename "$f")" in
+            boot.img|vendor_boot.img|Image|Image.gz|Image.lz4)
+              name="$(basename "$f")"
+
+              # Prefer the official dist output. Avoid overwriting
+              # a previously copied file with a duplicate.
+              if [ ! -e "$OUT/$name" ]; then
+                cp -L "$f" "$OUT/$name"
+                echo "Collected: $f"
+              fi
+              ;;
+          esac
+        done < "$ROOT/found-images.txt"
+      fi
+
+      echo "=== Collected images ==="
+      ls -lh "$OUT"
+
+      if ! find "$OUT" -type f -size +0c -print -quit | grep -q .; then
+        echo "No completed kernel images collected."
+      fi
+
+  - name: Upload compiled kernel images
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: ace3pro-kernel-images
+      path: kernel-images/
+      if-no-files-found: warn
+      retention-days: 7
+      compression-level: 0
+
+  - name: Upload build logs and configuration
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: ace3pro-xpad-build-results
+      path: |
+        official-build.log
+        config-files.txt
+        config-check.txt
+        found-images.txt
+        kernel-work/kernel_platform/**/.config
+      if-no-files-found: warn
+      retention-days: 7
