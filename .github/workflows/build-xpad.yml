@@ -18,19 +18,13 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y \
-            git curl python3 \
-            build-essential bc bison flex \
-            libssl-dev libelf-dev \
-            zip unzip rsync
+          sudo apt-get install -y git curl python3
 
       - name: Install repo tool
         shell: bash
         run: |
           set -euxo pipefail
-          curl -fsSL \
-            https://storage.googleapis.com/git-repo-downloads/repo \
-            -o repo
+          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o repo
           chmod +x repo
           sudo install repo /usr/local/bin/repo
           repo --version
@@ -41,15 +35,13 @@ jobs:
           set -euxo pipefail
           mkdir -p "$GITHUB_WORKSPACE/kernel-work"
           cd "$GITHUB_WORKSPACE/kernel-work"
-
           repo init \
             -u https://github.com/OnePlusOSS/kernel_manifest.git \
             -b oneplus/sm8650 \
             -m oneplus_ace3_pro_b.xml
-
           repo sync -c -j2 --no-clone-bundle --no-tags
 
-      - name: Diagnose kernel config entry
+      - name: Locate effective GKI config path
         working-directory: kernel-work
         shell: bash
         run: |
@@ -57,60 +49,38 @@ jobs:
           LOG="$GITHUB_WORKSPACE/xpad-config-diagnosis.txt"
           exec > >(tee "$LOG") 2>&1
 
-          echo "========== 1. XPAD Kconfig =========="
-          grep -n -A30 -B5 \
-            'config JOYSTICK_XPAD' \
-            kernel_platform/common/drivers/input/joystick/Kconfig \
-            2>/dev/null || true
+          echo "========== Build entry =========="
+          grep -RIn \
+            --include='*.sh' \
+            -E 'prepare_vendor|build_with_bazel|bazel.*(gki|config)|pineapple.*gki' \
+            kernel_platform/oplus/build \
+            kernel_platform/msm-kernel \
+            2>/dev/null | head -150 || true
 
-          echo
-          echo "========== 2. Official build script =========="
-          sed -n '1,240p' \
-            kernel_platform/oplus/build/oplus_build_kernel.sh \
-            2>/dev/null || true
-
-          echo
-          echo "========== 3. Config and build files =========="
-          find kernel_platform \
-            -type f \
-            \( -name '*defconfig*' \
-            -o -name '*fragment*' \
-            -o -name 'build.config*' \
-            -o -name 'BUILD.bazel' \
-            -o -name '*.bzl' \) \
-            -not -path '*/out/*' \
-            -not -path '*/.git/*' \
-            2>/dev/null | head -500 || true
-
-          echo
-          echo "========== 4. Pineapple GKI references =========="
+          echo "========== Bazel config definitions =========="
           grep -RIn \
             --exclude-dir=.git \
             --exclude-dir=out \
-            --include='*.sh' \
             --include='*.bzl' \
             --include='BUILD*' \
+            --include='*.bazel' \
             --include='*.config' \
-            --include='*.mk' \
-            -E 'pineapple_gki|gki_defconfig|KERNEL_CONFIG|DEFCONFIG|defconfig' \
+            -E 'defconfig_fragments|gki_defconfig|android-recommended.config|kernel_config|pre_defconfig|post_defconfig' \
             kernel_platform/msm-kernel \
-            kernel_platform/oplus/build \
             kernel_platform/common \
-            2>/dev/null | head -500 || true
+            2>/dev/null | head -200 || true
 
-          echo
-          echo "========== 5. XPAD config settings in source =========="
+          echo "========== Existing XPAD settings =========="
           grep -RIn \
             --exclude-dir=.git \
             --exclude-dir=out \
-            --include='*defconfig*' \
             --include='*.config' \
-            --include='*.fragment' \
-            -E 'CONFIG_JOYSTICK_XPAD(=|_FF=)|CONFIG_INPUT_FF_MEMLESS=' \
-            kernel_platform \
-            2>/dev/null | head -300 || true
+            --include='*defconfig*' \
+            -E 'CONFIG_JOYSTICK_XPAD_FF|CONFIG_JOYSTICK_XPAD=' \
+            kernel_platform/common \
+            kernel_platform/msm-kernel \
+            2>/dev/null | head -100 || true
 
-          echo
           echo "========== Diagnosis finished =========="
 
       - name: Upload diagnosis report
