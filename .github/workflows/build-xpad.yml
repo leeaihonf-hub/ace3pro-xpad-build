@@ -24,7 +24,9 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o repo
+          curl -fsSL \
+            https://storage.googleapis.com/git-repo-downloads/repo \
+            -o repo
           chmod +x repo
           sudo install repo /usr/local/bin/repo
           repo --version
@@ -35,58 +37,86 @@ jobs:
           set -euxo pipefail
           mkdir -p "$GITHUB_WORKSPACE/kernel-work"
           cd "$GITHUB_WORKSPACE/kernel-work"
+
           repo init \
             -u https://github.com/OnePlusOSS/kernel_manifest.git \
             -b oneplus/sm8650 \
             -m oneplus_ace3_pro_b.xml
+
           repo sync -c -j2 --no-clone-bundle --no-tags
 
-      - name: Locate effective GKI config path
+      - name: Inspect vendor config generation
         working-directory: kernel-work
         shell: bash
         run: |
           set -u
-          LOG="$GITHUB_WORKSPACE/xpad-config-diagnosis.txt"
+          LOG="$GITHUB_WORKSPACE/xpad-config-details.txt"
           exec > >(tee "$LOG") 2>&1
 
-          echo "========== Build entry =========="
-          grep -RIn \
-            --include='*.sh' \
-            -E 'prepare_vendor|build_with_bazel|bazel.*(gki|config)|pineapple.*gki' \
-            kernel_platform/oplus/build \
-            kernel_platform/msm-kernel \
+          echo "========== 1. Official kernel build script =========="
+          sed -n '1,220p' \
+            kernel_platform/oplus/build/oplus_build_kernel.sh \
+            2>/dev/null || true
+
+          echo
+          echo "========== 2. prepare_vendor.sh =========="
+          sed -n '1,280p' \
+            kernel_platform/build/android/prepare_vendor.sh \
+            2>/dev/null || true
+
+          echo
+          echo "========== 3. Build configuration scripts =========="
+          find kernel_platform/build \
+            -maxdepth 4 \
+            -type f \
+            \( -name '*bazel*.py' \
+            -o -name '*config*.py' \
+            -o -name '*config*.sh' \
+            -o -name '*.bzl' \) \
+            -not -path '*/out/*' \
             2>/dev/null | head -150 || true
 
-          echo "========== Bazel config definitions =========="
+          echo
+          echo "========== 4. Config generation references =========="
           grep -RIn \
             --exclude-dir=.git \
             --exclude-dir=out \
+            --include='*.sh' \
+            --include='*.py' \
             --include='*.bzl' \
             --include='BUILD*' \
-            --include='*.bazel' \
             --include='*.config' \
-            -E 'defconfig_fragments|gki_defconfig|android-recommended.config|kernel_config|pre_defconfig|post_defconfig' \
-            kernel_platform/msm-kernel \
-            kernel_platform/common \
-            2>/dev/null | head -200 || true
-
-          echo "========== Existing XPAD settings =========="
-          grep -RIn \
-            --exclude-dir=.git \
-            --exclude-dir=out \
-            --include='*.config' \
-            --include='*defconfig*' \
-            -E 'CONFIG_JOYSTICK_XPAD_FF|CONFIG_JOYSTICK_XPAD=' \
+            -E 'defconfig_fragments|android-recommended.config|KERNEL_CONFIG|CONFIG_JOYSTICK_XPAD_FF|pre_defconfig|post_defconfig|pineapple_GKI|merge_config|olddefconfig' \
+            kernel_platform/build \
             kernel_platform/common \
             kernel_platform/msm-kernel \
-            2>/dev/null | head -100 || true
+            kernel_platform/oplus/build \
+            2>/dev/null | head -300 || true
 
-          echo "========== Diagnosis finished =========="
+          echo
+          echo "========== 5. XPAD Kconfig =========="
+          grep -n -A30 -B5 \
+            'config JOYSTICK_XPAD' \
+            kernel_platform/common/drivers/input/joystick/Kconfig \
+            2>/dev/null || true
 
-      - name: Upload diagnosis report
+          echo
+          echo "========== 6. Existing ARM64 config =========="
+          grep -n -E \
+            'CONFIG_(JOYSTICK_XPAD|JOYSTICK_XPAD_FF|INPUT_FF_MEMLESS)=' \
+            kernel_platform/common/arch/arm64/configs/gki_defconfig \
+            kernel_platform/msm-kernel/arch/arm64/configs/gki_defconfig \
+            kernel_platform/common/kernel/configs/android-recommended.config \
+            kernel_platform/msm-kernel/kernel/configs/android-recommended.config \
+            2>/dev/null || true
+
+          echo
+          echo "========== 7. Diagnosis finished =========="
+
+      - name: Upload config details
         uses: actions/upload-artifact@v4
         with:
-          name: ace3pro-xpad-config-diagnosis
-          path: xpad-config-diagnosis.txt
+          name: ace3pro-xpad-config-details
+          path: xpad-config-details.txt
           if-no-files-found: error
           retention-days: 7
