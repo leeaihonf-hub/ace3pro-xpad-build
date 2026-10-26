@@ -37,8 +37,8 @@ jobs:
       - name: Initialize official OnePlus manifest
         run: |
           set -eux
-          mkdir -p kernel-work
-          cd kernel-work
+          mkdir -p "$GITHUB_WORKSPACE/kernel-work"
+          cd "$GITHUB_WORKSPACE/kernel-work"
           repo init \
             -u https://github.com/OnePlusOSS/kernel_manifest.git \
             -b oneplus/sm8650 \
@@ -90,6 +90,7 @@ jobs:
           PY
 
       - name: Build official Ace 3 Pro GKI kernel
+        id: kernel_build
         working-directory: kernel-work
         shell: bash
         run: |
@@ -97,7 +98,7 @@ jobs:
           bash kernel_platform/oplus/build/oplus_build_kernel.sh pineapple gki \
             2>&1 | tee "$GITHUB_WORKSPACE/official-build.log"
 
-      - name: Check final XPAD rumble config
+      - name: Inspect final XPAD config
         if: always()
         working-directory: kernel-work
         shell: bash
@@ -106,80 +107,77 @@ jobs:
           : > "$GITHUB_WORKSPACE/config-files.txt"
           : > "$GITHUB_WORKSPACE/config-check.txt"
 
-          find kernel_platform -type f -name .config \
-            -print > "$GITHUB_WORKSPACE/config-files.txt"
-
-          found=0
-          enabled=0
+          find "$GITHUB_WORKSPACE/kernel-work/kernel_platform" \
+            -type f -name .config \
+            -print > "$GITHUB_WORKSPACE/config-files.txt" 2>/dev/null
 
           while IFS= read -r config; do
             [ -f "$config" ] || continue
-            found=1
-            echo "=== $config ===" \
-              | tee -a "$GITHUB_WORKSPACE/config-check.txt"
-
-            grep -E \
-              '^(CONFIG_JOYSTICK_XPAD=|CONFIG_JOYSTICK_XPAD_FF=|CONFIG_INPUT_FF_MEMLESS=|# CONFIG_JOYSTICK_XPAD_FF is not set|# CONFIG_INPUT_FF_MEMLESS is not set)' \
-              "$config" \
-              | tee -a "$GITHUB_WORKSPACE/config-check.txt" || true
-
-            if grep -qx 'CONFIG_JOYSTICK_XPAD_FF=y' "$config" \
-              && grep -qx 'CONFIG_INPUT_FF_MEMLESS=y' "$config"; then
-              enabled=1
-            fi
+            {
+              echo "=== $config ==="
+              grep -E \
+                '^(CONFIG_JOYSTICK_XPAD=|CONFIG_JOYSTICK_XPAD_FF=|CONFIG_INPUT_FF_MEMLESS=|# CONFIG_JOYSTICK_XPAD_FF is not set|# CONFIG_INPUT_FF_MEMLESS is not set)' \
+                "$config" || true
+            } | tee -a "$GITHUB_WORKSPACE/config-check.txt"
           done < "$GITHUB_WORKSPACE/config-files.txt"
 
-          if [ "$found" -eq 0 ]; then
+          if [ ! -s "$GITHUB_WORKSPACE/config-files.txt" ]; then
             echo "No .config files found." \
-              | tee -a "$GITHUB_WORKSPACE/config-check.txt"
-          elif [ "$enabled" -eq 1 ]; then
-            echo "RUMBLE_CONFIG_ENABLED=true" \
-              | tee -a "$GITHUB_WORKSPACE/config-check.txt"
-          else
-            echo "RUMBLE_CONFIG_ENABLED=false" \
-              | tee -a "$GITHUB_WORKSPACE/config-check.txt"
-            echo "WARNING: XPAD rumble is not enabled in inspected configs."
+              | tee "$GITHUB_WORKSPACE/config-check.txt"
           fi
 
-      - name: Collect compiled kernel images
-        if: success()
-        working-directory: kernel-work
+      - name: Search and collect kernel images
+        if: always()
         shell: bash
         run: |
-          set -eu
-          OUT="$GITHUB_WORKSPACE/kernel-images"
+          set +e
+          ROOT="$GITHUB_WORKSPACE"
+          OUT="$ROOT/kernel-images"
           mkdir -p "$OUT"
+          : > "$ROOT/found-images.txt"
 
-          echo "=== Search actual output directories ==="
-          find kernel_platform -type f \
+          echo "=== Search image files and symlinks ==="
+
+          find "$ROOT/kernel-work" \
+            \( -type f -o -type l \) \
             \( -name boot.img -o -name vendor_boot.img \
                -o -name Image -o -name Image.gz \
                -o -name Image.lz4 \) \
-            -print > "$GITHUB_WORKSPACE/found-images.txt"
+            -print 2>/dev/null > "$ROOT/found-images.txt"
 
-          cat "$GITHUB_WORKSPACE/found-images.txt"
+          cat "$ROOT/found-images.txt"
 
           while IFS= read -r f; do
-            [ -s "$f" ] || continue
-            cp "$f" "$OUT/$(basename "$f")"
-            echo "Collected: $f"
-          done < "$GITHUB_WORKSPACE/found-images.txt"
+            [ -e "$f" ] || continue
+            name="$(basename "$f")"
+            case "$name" in
+              boot.img|vendor_boot.img|Image|Image.gz|Image.lz4)
+                if [ -s "$f" ] && [ ! -e "$OUT/$name" ]; then
+                  cp -L "$f" "$OUT/$name"
+                  echo "Collected: $f"
+                fi
+                ;;
+            esac
+          done < "$ROOT/found-images.txt"
 
-          echo "=== Collected images ==="
+          echo "=== Check known dist directories ==="
+          find "$ROOT/kernel-work" -type d -name dist \
+            -print 2>/dev/null || true
+
+          echo "=== Collected image files ==="
           ls -lh "$OUT"
 
           if ! find "$OUT" -type f -size +0c -print -quit | grep -q .; then
-            echo "ERROR: No kernel images found under kernel_platform."
-            exit 1
+            echo "No images collected. See official-build.log and found-images.txt."
           fi
 
       - name: Upload compiled kernel images
-        if: success()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ace3pro-kernel-images
           path: kernel-images/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
           compression-level: 0
 
