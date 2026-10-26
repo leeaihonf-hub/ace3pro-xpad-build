@@ -115,11 +115,13 @@ jobs:
           while IFS= read -r config; do
             [ -f "$config" ] || continue
             found=1
-            echo "=== $config ===" | tee -a "$GITHUB_WORKSPACE/config-check.txt"
+            echo "=== $config ===" \
+              | tee -a "$GITHUB_WORKSPACE/config-check.txt"
 
             grep -E \
               '^(CONFIG_JOYSTICK_XPAD=|CONFIG_JOYSTICK_XPAD_FF=|CONFIG_INPUT_FF_MEMLESS=|# CONFIG_JOYSTICK_XPAD_FF is not set|# CONFIG_INPUT_FF_MEMLESS is not set)' \
-              "$config" | tee -a "$GITHUB_WORKSPACE/config-check.txt" || true
+              "$config" \
+              | tee -a "$GITHUB_WORKSPACE/config-check.txt" || true
 
             if grep -qx 'CONFIG_JOYSTICK_XPAD_FF=y' "$config" \
               && grep -qx 'CONFIG_INPUT_FF_MEMLESS=y' "$config"; then
@@ -145,23 +147,29 @@ jobs:
         shell: bash
         run: |
           set -eu
-          DIST="kernel_platform/out/msm-kernel-pineapple-gki/dist"
           OUT="$GITHUB_WORKSPACE/kernel-images"
           mkdir -p "$OUT"
 
-          for f in boot.img vendor_boot.img Image Image.gz Image.lz4; do
-            if [ -s "$DIST/$f" ]; then
-              cp "$DIST/$f" "$OUT/"
-              echo "Collected: $f ($(du -h "$OUT/$f" | cut -f1))"
-            else
-              echo "Not found: $DIST/$f"
-            fi
-          done
+          echo "=== Search actual output directories ==="
+          find kernel_platform -type f \
+            \( -name boot.img -o -name vendor_boot.img \
+               -o -name Image -o -name Image.gz \
+               -o -name Image.lz4 \) \
+            -print > "$GITHUB_WORKSPACE/found-images.txt"
 
+          cat "$GITHUB_WORKSPACE/found-images.txt"
+
+          while IFS= read -r f; do
+            [ -s "$f" ] || continue
+            cp "$f" "$OUT/$(basename "$f")"
+            echo "Collected: $f"
+          done < "$GITHUB_WORKSPACE/found-images.txt"
+
+          echo "=== Collected images ==="
           ls -lh "$OUT"
 
           if ! find "$OUT" -type f -size +0c -print -quit | grep -q .; then
-            echo "ERROR: No kernel images were collected."
+            echo "ERROR: No kernel images found under kernel_platform."
             exit 1
           fi
 
@@ -184,6 +192,7 @@ jobs:
             official-build.log
             config-files.txt
             config-check.txt
+            found-images.txt
             kernel-work/kernel_platform/**/.config
           if-no-files-found: warn
           retention-days: 7
